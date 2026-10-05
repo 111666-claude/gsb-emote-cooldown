@@ -12,28 +12,38 @@ class Guard:
         self.cooldown_ms = cooldown_ms
         self.rate_per_sec = rate_per_sec
         self.last = {}
-        self.log = []
+        self.rate = {}
         self.seen = set()
         self.scanned = 0
 
     def allow(self, event_id, player, emote, at_ms):
         """判定一次表情请求，返回 (是否允许, 拒绝原因)。"""
-        previous = self.last.get(emote)
-        if previous is not None:
-            self.scanned += 1
-            if at_ms - previous < self.cooldown_ms:
-                return False, "cooldown"
-        self.last[emote] = at_ms
+        self.scanned += 1
+        if event_id in self.seen:
+            return False, "dup"
+
+        if emote not in KNOWN:
+            self.seen.add(event_id)
+            return False, "unknown"
+
+        key = (player, emote)
+        self.scanned += 1
+        previous = self.last.get(key)
+        if previous is not None and at_ms - previous < self.cooldown_ms:
+            self.seen.add(event_id)
+            return False, "cooldown"
 
         second = at_ms // SECOND_MS
-        used = 0
-        for entry in self.log:
-            self.scanned += 1
-            if entry == (player, second):
-                used += 1
-        if used > self.rate_per_sec:
+        buckets = self.rate.setdefault(player, {})
+        for stale in [slot for slot in buckets if slot < second]:
+            del buckets[stale]
+        self.scanned += 1
+        used = buckets.get(second, 0)
+        if used >= self.rate_per_sec:
+            self.seen.add(event_id)
             return False, "rate"
 
-        self.log.append((player, second))
+        self.last[key] = at_ms
+        buckets[second] = used + 1
         self.seen.add(event_id)
         return True, ""
